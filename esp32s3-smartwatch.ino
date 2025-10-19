@@ -2,14 +2,19 @@
 #include <Arduino.h>
 #include "pin_config.h"
 #include <lvgl.h>
+#include <time.h>
+#include <sys/time.h>
 
 #include "Arduino_GFX_Library.h"
 #include "Arduino_DriveBus_Library.h"
 #include "lv_conf.h"
 #include "ui.h"
+#include "XPowersLib.h"
 
 #include "HWCDC.h"
 HWCDC USBSerial;
+
+XPowersPMU power;
 
 uint32_t screenWidth;
 uint32_t screenHeight;
@@ -124,6 +129,64 @@ void my_disp_rounder(lv_disp_drv_t *disp_drv, lv_area_t *area) {
   area->y2 = ((y2 >> 1) << 1) + 1;
 }
 
+// Update time labels on the UI
+void update_time_labels(lv_timer_t * timer) {
+  struct tm timeinfo;
+  time_t now = time(NULL);
+  localtime_r(&now, &timeinfo);
+
+  char time_str[3];
+  const char* days[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+  char date_str[6];
+
+  // Update Hour
+  snprintf(time_str, sizeof(time_str), "%02d", timeinfo.tm_hour);
+  lv_label_set_text(ui_Hour, time_str);
+
+  // Update Minutes
+  snprintf(time_str, sizeof(time_str), "%02d", timeinfo.tm_min);
+  lv_label_set_text(ui_Minutes, time_str);
+
+  // Update Seconds
+  snprintf(time_str, sizeof(time_str), "%02d", timeinfo.tm_sec);
+  lv_label_set_text(ui_Seconds, time_str);
+
+  // Update Day of week
+  lv_label_set_text(ui_Day, days[timeinfo.tm_wday]);
+
+  // Update Date (DD/MM format)
+  snprintf(date_str, sizeof(date_str), "%02d/%02d", timeinfo.tm_mday, timeinfo.tm_mon + 1);
+  lv_label_set_text(ui_Date, date_str);
+}
+
+// Update battery status on the UI
+void update_battery_status(lv_timer_t * timer) {
+  if (power.isBatteryConnect()) {
+    // Get battery percentage
+    int battery_percent = power.getBatteryPercent();
+
+    // Update battery bar value (0-100)
+    lv_bar_set_value(ui_BatteryBar, battery_percent, LV_ANIM_ON);
+
+    // Update battery label text
+    char battery_str[6];
+    snprintf(battery_str, sizeof(battery_str), "%d%%", battery_percent);
+    lv_label_set_text(ui_BatteryLabel, battery_str);
+
+    // Change color based on battery level
+    if (battery_percent > 50) {
+      lv_obj_set_style_text_color(ui_BatteryLabel, lv_color_hex(0x00F943), LV_PART_MAIN | LV_STATE_DEFAULT); // Green
+    } else if (battery_percent > 20) {
+      lv_obj_set_style_text_color(ui_BatteryLabel, lv_color_hex(0xFFA500), LV_PART_MAIN | LV_STATE_DEFAULT); // Orange
+    } else {
+      lv_obj_set_style_text_color(ui_BatteryLabel, lv_color_hex(0xFF0000), LV_PART_MAIN | LV_STATE_DEFAULT); // Red
+    }
+  } else {
+    lv_label_set_text(ui_BatteryLabel, "N/A");
+    lv_bar_set_value(ui_BatteryBar, 0, LV_ANIM_OFF);
+  }
+}
+
 void setup() {
 #ifdef DEV_DEVICE_INIT
   DEV_DEVICE_INIT();
@@ -152,6 +215,23 @@ void setup() {
 
   FT3168->IIC_Write_Device_State(FT3168->Arduino_IIC_Touch::Device::TOUCH_POWER_MODE,
                                  FT3168->Arduino_IIC_Touch::Device_Mode::TOUCH_POWER_MONITOR);
+
+  // Initialize AXP2101 Power Management
+  if (!power.begin(Wire, AXP2101_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
+    USBSerial.println("Failed to initialize AXP2101 power management!");
+  } else {
+    USBSerial.println("AXP2101 initialized successfully");
+
+    // Configure power management
+    power.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
+    power.clearIrqStatus();
+
+    // Enable battery detection and voltage measurement
+    power.enableBattDetection();
+    power.enableVbusVoltageMeasure();
+    power.enableBattVoltageMeasure();
+    power.enableSystemVoltageMeasure();
+  }
 
   lv_init();
 
@@ -208,6 +288,30 @@ void setup() {
 
     // Initialize SquareLine Studio UI
     ui_init();
+
+    // Set initial time (example: October 10, 2025, 14:30:00)
+    // You can replace this with NTP time sync or RTC
+    struct timeval tv;
+    struct tm timeinfo;
+    timeinfo.tm_year = 2025 - 1900;  // Years since 1900
+    timeinfo.tm_mon = 10 - 1;        // Month (0-11)
+    timeinfo.tm_mday = 10;           // Day of month
+    timeinfo.tm_hour = 14;           // Hour (0-23)
+    timeinfo.tm_min = 30;            // Minute
+    timeinfo.tm_sec = 0;             // Second
+    tv.tv_sec = mktime(&timeinfo);
+    tv.tv_usec = 0;
+    settimeofday(&tv, NULL);
+
+    // Create LVGL timer to update time labels every 1000ms (1 second)
+    lv_timer_create(update_time_labels, 1000, NULL);
+
+    // Create LVGL timer to update battery status every 5000ms (5 seconds)
+    lv_timer_create(update_battery_status, 5000, NULL);
+
+    // Call once immediately to show current time and battery
+    update_time_labels(NULL);
+    update_battery_status(NULL);
   }
 
   USBSerial.println("Setup done");
