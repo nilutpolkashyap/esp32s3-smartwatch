@@ -2,6 +2,8 @@
 #include <Arduino.h>
 #include "pin_config.h"
 #include <lvgl.h>
+#include <time.h>
+#include <sys/time.h>
 
 #include "Arduino_GFX_Library.h"
 #include "Arduino_DriveBus_Library.h"
@@ -124,6 +126,36 @@ void my_disp_rounder(lv_disp_drv_t *disp_drv, lv_area_t *area) {
   area->y2 = ((y2 >> 1) << 1) + 1;
 }
 
+// Update time labels on the UI
+void update_time_labels(lv_timer_t * timer) {
+  struct tm timeinfo;
+  time_t now = time(NULL);
+  localtime_r(&now, &timeinfo);
+
+  char time_str[3];
+  const char* days[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+  char date_str[6];
+
+  // Update Hour
+  snprintf(time_str, sizeof(time_str), "%02d", timeinfo.tm_hour);
+  lv_label_set_text(ui_Hour, time_str);
+
+  // Update Minutes
+  snprintf(time_str, sizeof(time_str), "%02d", timeinfo.tm_min);
+  lv_label_set_text(ui_Minutes, time_str);
+
+  // Update Seconds
+  snprintf(time_str, sizeof(time_str), "%02d", timeinfo.tm_sec);
+  lv_label_set_text(ui_Seconds, time_str);
+
+  // Update Day of week
+  lv_label_set_text(ui_Day, days[timeinfo.tm_wday]);
+
+  // Update Date (DD/MM format)
+  snprintf(date_str, sizeof(date_str), "%02d/%02d", timeinfo.tm_mday, timeinfo.tm_mon + 1);
+  lv_label_set_text(ui_Date, date_str);
+}
+
 void setup() {
 #ifdef DEV_DEVICE_INIT
   DEV_DEVICE_INIT();
@@ -208,6 +240,26 @@ void setup() {
 
     // Initialize SquareLine Studio UI
     ui_init();
+
+    // Set initial time (example: October 10, 2025, 14:30:00)
+    // You can replace this with NTP time sync or RTC
+    struct timeval tv;
+    struct tm timeinfo;
+    timeinfo.tm_year = 2025 - 1900;  // Years since 1900
+    timeinfo.tm_mon = 10 - 1;        // Month (0-11)
+    timeinfo.tm_mday = 10;           // Day of month
+    timeinfo.tm_hour = 14;           // Hour (0-23)
+    timeinfo.tm_min = 30;            // Minute
+    timeinfo.tm_sec = 0;             // Second
+    tv.tv_sec = mktime(&timeinfo);
+    tv.tv_usec = 0;
+    settimeofday(&tv, NULL);
+
+    // Create LVGL timer to update time labels every 1000ms (1 second)
+    lv_timer_create(update_time_labels, 1000, NULL);
+
+    // Call once immediately to show current time
+    update_time_labels(NULL);
   }
 
   USBSerial.println("Setup done");
