@@ -9,9 +9,12 @@
 #include "Arduino_DriveBus_Library.h"
 #include "lv_conf.h"
 #include "ui.h"
+#include "XPowersLib.h"
 
 #include "HWCDC.h"
 HWCDC USBSerial;
+
+XPowersPMU power;
 
 uint32_t screenWidth;
 uint32_t screenHeight;
@@ -156,6 +159,34 @@ void update_time_labels(lv_timer_t * timer) {
   lv_label_set_text(ui_Date, date_str);
 }
 
+// Update battery status on the UI
+void update_battery_status(lv_timer_t * timer) {
+  if (power.isBatteryConnect()) {
+    // Get battery percentage
+    int battery_percent = power.getBatteryPercent();
+
+    // Update battery bar value (0-100)
+    lv_bar_set_value(ui_BatteryBar, battery_percent, LV_ANIM_ON);
+
+    // Update battery label text
+    char battery_str[6];
+    snprintf(battery_str, sizeof(battery_str), "%d%%", battery_percent);
+    lv_label_set_text(ui_BatteryLabel, battery_str);
+
+    // Change color based on battery level
+    if (battery_percent > 50) {
+      lv_obj_set_style_text_color(ui_BatteryLabel, lv_color_hex(0x00F943), LV_PART_MAIN | LV_STATE_DEFAULT); // Green
+    } else if (battery_percent > 20) {
+      lv_obj_set_style_text_color(ui_BatteryLabel, lv_color_hex(0xFFA500), LV_PART_MAIN | LV_STATE_DEFAULT); // Orange
+    } else {
+      lv_obj_set_style_text_color(ui_BatteryLabel, lv_color_hex(0xFF0000), LV_PART_MAIN | LV_STATE_DEFAULT); // Red
+    }
+  } else {
+    lv_label_set_text(ui_BatteryLabel, "N/A");
+    lv_bar_set_value(ui_BatteryBar, 0, LV_ANIM_OFF);
+  }
+}
+
 void setup() {
 #ifdef DEV_DEVICE_INIT
   DEV_DEVICE_INIT();
@@ -184,6 +215,23 @@ void setup() {
 
   FT3168->IIC_Write_Device_State(FT3168->Arduino_IIC_Touch::Device::TOUCH_POWER_MODE,
                                  FT3168->Arduino_IIC_Touch::Device_Mode::TOUCH_POWER_MONITOR);
+
+  // Initialize AXP2101 Power Management
+  if (!power.begin(Wire, AXP2101_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
+    USBSerial.println("Failed to initialize AXP2101 power management!");
+  } else {
+    USBSerial.println("AXP2101 initialized successfully");
+
+    // Configure power management
+    power.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
+    power.clearIrqStatus();
+
+    // Enable battery detection and voltage measurement
+    power.enableBattDetection();
+    power.enableVbusVoltageMeasure();
+    power.enableBattVoltageMeasure();
+    power.enableSystemVoltageMeasure();
+  }
 
   lv_init();
 
@@ -258,8 +306,12 @@ void setup() {
     // Create LVGL timer to update time labels every 1000ms (1 second)
     lv_timer_create(update_time_labels, 1000, NULL);
 
-    // Call once immediately to show current time
+    // Create LVGL timer to update battery status every 5000ms (5 seconds)
+    lv_timer_create(update_battery_status, 5000, NULL);
+
+    // Call once immediately to show current time and battery
     update_time_labels(NULL);
+    update_battery_status(NULL);
   }
 
   USBSerial.println("Setup done");
